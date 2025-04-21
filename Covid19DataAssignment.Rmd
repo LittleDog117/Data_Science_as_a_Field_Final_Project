@@ -1,0 +1,248 @@
+---
+title: "Covid19Data"
+author: "William Eaton"
+date: "2025-04-16"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    keep_tex: true
+    number_sections: true
+    fig_caption: true
+---
+
+```{r setup, include=FALSE}
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Install packages
+
+Here is a list of all the packages and libraries needed. Un-comment the install line if needed.
+
+```{r}
+#install.packages(c("dplyr", "ggplot2", "ggplot2", "tidyr", "stringr", "broom", "tinytex"))
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(broom)
+library(tinytex)
+```
+## Get the data
+
+The data is extracted from the github repository. Acquired from [Link Text](https://github.com/CSSEGISandData/COVID-19)
+
+```{r, results = 'hide'}
+#Get the data from the URL
+
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_US.csv", 
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_deaths_global.csv")
+
+urls <- str_c(url_in, file_names)
+
+global_cases <- read.csv(urls[2])
+global_deaths <- read.csv(urls[4])
+
+#Look at the data
+summary(global_cases)
+summary(global_deaths)
+head(global_cases)
+head(global_deaths)
+
+```
+## Cleaning the data
+
+For this project I decided to look specifically into the Canadian data. Therefore, I only used the global cases and global deaths data. I cleaned the data values, removed NA values, and filtered by the country 'Canada'. 
+
+```{r, results = 'hide'}
+clean_covid_data <- function(data, region_type = "global") {
+  cleaned <- data %>%
+    pivot_longer(
+      cols = starts_with("X"),
+      names_to = "Date",
+      values_to = "Count"
+    ) %>%
+    mutate(
+      Date = str_remove(Date, "^X"),
+      Date = as.Date(Date, format = "%m.%d.%y")
+    ) %>%
+    drop_na()  # Remove NA values
+  
+  if (region_type == "global") {
+    cleaned <- cleaned %>%
+      rename(
+        Province = `Province.State`,
+        Country = `Country.Region`
+      ) %>%
+      filter(Country == "Canada") %>%
+      select(Province, Country, Date, Count)
+    
+  } else if (region_type == "us") {
+    cleaned <- cleaned %>%
+      rename(
+        Province = `Province_State`,
+        Country = `Country_Region`
+      ) %>%
+      filter(Country == "Canada") %>%
+      select(Province, Country, Date, Count)
+  }
+  
+  return(cleaned)
+}
+
+canadian_cases <- clean_covid_data(global_cases, region_type = "global")
+canadian_deaths <- clean_covid_data(global_deaths, region_type = "global")
+
+#Look at the data
+summary(canadian_cases)
+summary(canadian_deaths)
+head(canadian_cases)
+head(canadian_deaths)
+```
+
+## Cases and Deaths Over Time
+I then plotted a general Cases and Deaths over time plot Using a log scale. I also calculated and plotted the fatality rate: Total Deaths/ Total Cases * 100.
+
+```{r}
+cases_summary <- canadian_cases %>%
+  group_by(Date) %>%
+  summarise(Total_Cases = sum(Count), .groups = "drop")
+
+deaths_summary <- canadian_deaths %>%
+  group_by(Date) %>%
+  summarise(Total_Deaths = sum(Count), .groups = "drop")
+
+combined <- left_join(cases_summary, deaths_summary, by = "Date") %>%
+  filter(Total_Cases > 0)
+
+# Plot 1: Cases and Deaths
+ggplot(combined, aes(x = Date)) +
+  geom_smooth(aes(y = Total_Cases, color = "Cases"), 
+              se = FALSE, linetype = "solid", linewidth = 1) +
+  geom_smooth(aes(y = Total_Deaths, color = "Deaths"), 
+              se = FALSE, linetype = "dashed", linewidth = 1) +
+  scale_y_log10() +
+  labs(
+    title = "COVID-19 Cases and Deaths in Canada",
+    y = "Count",
+    color = "Metric"
+  ) +
+  theme_minimal()
+
+# Plot 2: Fatality Rate
+fatality_data <- combined %>%
+  mutate(Fatality_Rate = Total_Deaths / Total_Cases * 100)
+
+ggplot(fatality_data, aes(x = Date, y = Fatality_Rate)) +
+  geom_line(color = "blue", linewidth = 1) +
+  labs(
+    title = "COVID-19 Case Fatality Rate in Canada",
+    x = "Date",
+    y = "Fatality Rate (%)"
+  ) +
+  theme_minimal()
+```
+## Cases and Deaths Over Time For each province
+I then did the same thing, but using the Province Data rather than the whol country.
+
+```{r, fig.width=12, fig.height=10}
+## Canadian Provinces
+
+exclude_provinces <- c("Diamond Princess", "Grand Princess", "Repatriated Travellers")
+
+canadian_cases <- canadian_cases %>%
+  filter(!Province %in% exclude_provinces)
+
+canadian_deaths <- canadian_deaths %>%
+  filter(!Province %in% exclude_provinces)
+
+cases_by_province <- canadian_cases %>%
+  group_by(Province, Date) %>%
+  summarise(Total_Cases = sum(Count), .groups = "drop")
+
+deaths_by_province <- canadian_deaths %>%
+  group_by(Province, Date) %>%
+  summarise(Total_Deaths = sum(Count), .groups = "drop")
+
+canada_combined <- left_join(cases_by_province, deaths_by_province,
+                             by = c("Province", "Date"))
+
+ggplot(canada_combined, aes(x = Date)) +
+  geom_line(aes(y = Total_Cases, color = "Cases"), linewidth = 1) +
+  geom_line(aes(y = Total_Deaths, color = "Deaths"), linetype = "dashed", size = 1) +
+  scale_y_log10() +
+  facet_wrap(~ Province, scales = "free_y") +
+  labs(
+    title = "COVID-19 Cases and Deaths Over Time in Canadian Provinces",
+    y = "Count",
+    color = "Metric"
+  ) +
+  theme_minimal()
+
+canada_Fatality_Rate <- canada_combined %>%
+  mutate(CFR = case_when(
+    Total_Cases > 0 & Total_Deaths > 0 ~ Total_Deaths / Total_Cases * 100,
+    Total_Cases > 0 & Total_Deaths == 0 ~ 0,
+    TRUE ~ NA_real_
+  )) %>%
+  filter(!is.na(CFR), is.finite(CFR))
+
+ggplot(canada_Fatality_Rate, aes(x = Date)) +
+  geom_line(aes(y = CFR, color = "Fatality Rate"), linewidth = 1) +
+  scale_y_log10() +
+  facet_wrap(~ Province, scales = "free_y") +
+  labs(
+    title = "Fatality Rate Over Time in Canadian Provinces",
+    y = "Fatality Rate (%)",
+    color = "Metric"
+  ) +
+  theme_minimal()
+```
+
+
+## Cases and Deaths per thousand.
+Finally, I plotted the cases and Deaths per thousands and modeled a linear fit to the data.
+```{r plot-cases-vs-deaths-per-thousand, warning=FALSE, message=FALSE}
+deaths_summary <- canadian_deaths %>%
+  group_by(Date) %>%
+  summarise(Total_Deaths = sum(Count), .groups = "drop")
+
+scatter_data <- left_join(cases_summary, deaths_summary, by = "Date") %>%
+  filter(Total_Cases > 0) %>% 
+  mutate(
+    Cases_per_1000  = Total_Cases  / 1000,
+    Deaths_per_1000 = Total_Deaths / 1000
+  )
+
+scatter_data <- scatter_data %>%
+  select(Cases_per_1000, Deaths_per_1000)
+
+ggplot(scatter_data, aes(x = Cases_per_1000, y = Deaths_per_1000)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(
+    title = "COVID‑19 Deaths vs. Cases in Canada (per 1000)",
+    x = "Cases per 1000",
+    y = "Deaths per 1000"
+  ) +
+  theme_minimal()
+
+lm_fit <- lm(Deaths_per_1000 ~ Cases_per_1000, data = scatter_data)
+
+cat("=== Base R summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Coefficients (tidy) ===\n")
+print(tidy(lm_fit))
+
+cat("\n=== Model Fit Statistics (glance) ===\n")
+print(glance(lm_fit))
+```
+
+## Analysis.
+Compared to the American data we saw in class, we see that Canada had a similar trend in terms of the cases and deaths over time. We see that both cases and deaths sharpely incresed in the early dates but then gradually relaxed and approached a constant amount. We are also able to see that the fatality rate was much higher during earlier times but also settled down closer to zero later on.
+
+When looking at the Province Data, we see that larger provinces with larger populations (Quebec, Ontario, etc...) had similar trends to the Country wide Canada data. However, Provinces with smaller populations had both smaller cases and death counts. Their fatality rates were also significantely smaller. 
